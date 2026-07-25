@@ -7,11 +7,17 @@ const globalQueue = globalThis as unknown as {
   generationQueue?: Queue;
 };
 
+// maxRetriesPerRequest/retryStrategy stay bounded here (unlike the worker's
+// connection in worker.ts, which needs `maxRetriesPerRequest: null` for
+// blocking reads) so a flaky Redis link fails an API request quickly instead
+// of hanging it indefinitely.
 export const redis =
   globalQueue.redis ??
   new IORedis(env().REDIS_URL, {
-    maxRetriesPerRequest: null,
-    enableReadyCheck: false
+    maxRetriesPerRequest: 3,
+    enableReadyCheck: false,
+    connectTimeout: 5_000,
+    retryStrategy: (times) => (times > 3 ? null : Math.min(times * 500, 2_000))
   });
 
 export const generationQueue =

@@ -1,5 +1,5 @@
-import OpenAI from "openai";
-import { eq } from "drizzle-orm";
+import Anthropic from "@anthropic-ai/sdk";
+import { asc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/server/db";
 import { conversations, jobs, messages } from "@/server/db/schema";
@@ -35,57 +35,79 @@ export async function POST(request: Request) {
   }
 
   await db.insert(messages).values({ conversationId, role: "user", content: message });
-  const client = new OpenAI({ apiKey: env().OPENAI_API_KEY });
+  const history = await db
+    .select()
+    .from(messages)
+    .where(eq(messages.conversationId, conversationId))
+    .orderBy(asc(messages.createdAt));
+
+  const client = new Anthropic({ apiKey: env().ANTHROPIC_API_KEY });
 
   const stream = new ReadableStream({
     async start(controller) {
       let assistantText = "";
-      let responseId: string | undefined;
       try {
-        const response = await client.responses.create({
-          model: env().OPENAI_MODEL,
-          stream: true,
-          store: true,
-          previous_response_id: conversation.openaiResponseId ?? undefined,
-          instructions:
+        const anthropicStream = client.messages.stream({
+          model: env().ANTHROPIC_MODEL,
+          max_tokens: 4096,
+          system:
             "You are Forge AI, an automotive design and Unreal Engine production agent. Be concise, explain planned changes, and call tools only when a real generation or import is requested. Never claim a tool completed unless its output confirms completion.",
-          input: [{ role: "user", content: message }],
+          messages: history.map((row) => ({
+            role: row.role === "assistant" ? ("assistant" as const) : ("user" as const),
+            content: row.content
+          })),
           tools: forgeTools
         });
 
-        for await (const item of response) {
-          if (item.type === "response.created") responseId = item.response.id;
-          if (item.type === "response.output_text.delta") {
-            assistantText += item.delta;
-            controller.enqueue(event("text", { delta: item.delta }));
-          }
-          if (item.type === "response.output_item.done" && item.item.type === "function_call") {
-            const args = JSON.parse(item.item.arguments) as Record<string, unknown>;
-            const [job] = await db
-              .insert(jobs)
-              .values({ projectId, type: item.item.name, input: args })
-              .returning();
-            await generationQueue.add(
-              item.item.name,
-              { databaseJobId: job.id, projectId, ...args },
-              { jobId: job.id }
-            );
-            controller.enqueue(event("tool", { id: job.id, name: item.item.name, status: "queued" }));
-          }
-        }
+        anthropicStream.on("text", (delta) => {
+          assistantText += delta;
+          controller.enqueue(event("text", { delta }));
+        });
+
+        const finalMessage = await anthropicStream.finalMessage();
 
         if (assistantText) {
           await db.insert(messages).values({ conversationId, role: "assistant", content: assistantText });
         }
-        if (responseId) {
-          await db
-            .update(conversations)
-            .set({ openaiResponseId: responseId, updatedAt: new Date() })
-            .where(eq(conversations.id, conversationId));
+
+        for (const block of finalMessage.content) {
+          if (block.type === "tool_use" && block.name === "generate_vehicle_asset") {
+            const args = block.input as Record<string, unknown>;
+            const [job] = await db
+              .insert(jobs)
+              .values({ projectId, type: block.name, input: args })
+              .returning();
+            try {
+              await generationQueue.add(
+                block.name,
+                { databaseJobId: job.id, projectId, ...args },
+                { jobId: job.id }
+              );
+              controller.enqueue(event("tool", { id: job.id, name: block.name, status: "queued" }));
+            } catch (queueError) {
+              await db
+                .update(jobs)
+                .set({
+                  status: "failed",
+                  error: queueError instanceof Error ? queueError.message : "Could not queue job",
+                  updatedAt: new Date()
+                })
+                .where(eq(jobs.id, job.id));
+              throw queueError;
+            }
+          }
         }
-        controller.enqueue(event("done", { responseId }));
+
+        await db.update(conversations).set({ updatedAt: new Date() }).where(eq(conversations.id, conversationId));
+        controller.enqueue(event("done", { responseId: finalMessage.id }));
       } catch (error) {
-        controller.enqueue(event("error", { message: error instanceof Error ? error.message : "Generation failed" }));
+        const message =
+          error instanceof Anthropic.APIError
+            ? error.message
+            : error instanceof Error
+              ? error.message
+              : "Generation failed";
+        controller.enqueue(event("error", { message }));
       } finally {
         controller.close();
       }

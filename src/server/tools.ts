@@ -1,10 +1,11 @@
-export const forgeTools = [
+import type Anthropic from "@anthropic-ai/sdk";
+
+export const forgeTools: Anthropic.Tool[] = [
   {
-    type: "function" as const,
     name: "generate_vehicle_asset",
     description: "Start a 3D vehicle generation job when the user asks to create a new vehicle model.",
     strict: true,
-    parameters: {
+    input_schema: {
       type: "object",
       properties: {
         prompt: { type: "string", description: "Detailed production prompt for the 3D provider." },

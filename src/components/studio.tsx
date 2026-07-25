@@ -1,6 +1,5 @@
 "use client";
 
-import Image from "next/image";
 import { FormEvent, useEffect, useRef, useState } from "react";
 
 type StudioMessage = { id: string; role: "user" | "assistant" | "tool"; content: string };
@@ -9,6 +8,8 @@ type StudioState = {
   conversation: { id: string };
   messages: StudioMessage[];
 };
+type JobProgress = { percent: number; message: string };
+type PreviewAsset = { url: string; name: string };
 
 function parseSseChunk(chunk: string, onEvent: (type: string, data: Record<string, unknown>) => void) {
   for (const block of chunk.split("\n\n")) {
@@ -25,7 +26,14 @@ export function Studio() {
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [serviceError, setServiceError] = useState<string | null>(null);
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [jobProgress, setJobProgress] = useState<JobProgress | null>(null);
+  const [previewAsset, setPreviewAsset] = useState<PreviewAsset | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    import("@google/model-viewer");
+  }, []);
 
   useEffect(() => {
     fetch("/api/studio")
@@ -40,7 +48,46 @@ export function Studio() {
       .catch((error: Error) => setServiceError(error.message));
   }, []);
 
-  useEffect(() => endRef.current?.scrollIntoView({ behavior: "smooth" }), [messages]);
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  useEffect(() => {
+    if (!activeJobId) return;
+
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const response = await fetch(`/api/jobs/${activeJobId}`);
+        if (!response.ok) throw new Error("Job status unavailable");
+        const data = (await response.json()) as {
+          job: { status: string; progress: JobProgress; error: string | null };
+          asset: { storageKey: string; name: string } | null;
+        };
+        if (cancelled) return;
+
+        setJobProgress(data.job.progress);
+        if (data.job.status === "completed" && data.asset) {
+          setPreviewAsset({ url: `/api/assets/${encodeURIComponent(data.asset.storageKey)}`, name: data.asset.name });
+          setActiveJobId(null);
+          setJobProgress(null);
+        } else if (data.job.status === "failed" || data.job.status === "cancelled") {
+          setServiceError(data.job.error ?? "Vehicle generation failed");
+          setActiveJobId(null);
+          setJobProgress(null);
+        }
+      } catch (error) {
+        if (!cancelled) setServiceError(error instanceof Error ? error.message : "Job status unavailable");
+      }
+    };
+
+    poll();
+    const interval = setInterval(poll, 3_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [activeJobId]);
 
   async function sendMessage(event: FormEvent) {
     event.preventDefault();
@@ -83,6 +130,8 @@ export function Studio() {
                 ...current,
                 { id: String(data.id), role: "tool", content: `${String(data.name)} queued` }
               ]);
+              setActiveJobId(String(data.id));
+              setJobProgress({ percent: 0, message: "Queued" });
             }
             if (type === "error") setServiceError(String(data.message));
           });
@@ -132,10 +181,33 @@ export function Studio() {
 
           <aside className="previewPanel">
             <div className="previewTabs"><b>Preview</b><span>Details</span></div>
-            <button className="imageFrame" type="button">
-              <Image src="/apex-gt-cinematic.png" alt="Apex GT cinematic render" fill priority sizes="(max-width: 900px) 100vw, 55vw" />
-              <span className="live">● LIVE VIEWPORT</span><span className="play">▶</span>
-            </button>
+            {activeJobId ? (
+              <div className="imageFrame generating">
+                <div className="generatingState">
+                  <span className="spinner" />
+                  <b>{jobProgress?.message ?? "Generating vehicle model…"}</b>
+                  <small>{jobProgress?.percent ?? 0}%</small>
+                </div>
+              </div>
+            ) : previewAsset ? (
+              <div className="imageFrame modelFrame">
+                <model-viewer
+                  src={previewAsset.url}
+                  alt={previewAsset.name}
+                  camera-controls
+                  auto-rotate
+                  shadow-intensity="1"
+                  style={{ width: "100%", height: "100%", background: "#050609" }}
+                />
+                <span className="live">● GENERATED MODEL</span>
+              </div>
+            ) : (
+              <div className="imageFrame emptyState">
+                <span>✦</span>
+                <b>No model yet</b>
+                <small>Describe a vehicle in the chat to generate your first 3D model.</small>
+              </div>
+            )}
             <section className="inspector"><h2>Scene inspector</h2><div className="tabs"><b>Vehicle</b><span>Environment</span><span>Camera</span></div>
               <dl><div><dt>Body paint</dt><dd><i className="pearl" /> Pearl White</dd></div><div><dt>Wheel style</dt><dd>Turbine 21″</dd></div><div><dt>Ride height</dt><dd>−28 mm</dd></div><div><dt>Light signature</dt><dd><i className="amber" /> Amber line</dd></div></dl>
             </section>

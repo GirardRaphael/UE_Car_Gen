@@ -1,8 +1,8 @@
 import { z } from "zod";
 
 const envSchema = z.object({
-  OPENAI_API_KEY: z.string().min(20),
-  OPENAI_MODEL: z.string().default("gpt-5.6-sol"),
+  ANTHROPIC_API_KEY: z.string().min(20),
+  ANTHROPIC_MODEL: z.string().default("claude-opus-4-8"),
   DATABASE_URL: z.string().url(),
   REDIS_URL: z.string().url(),
   ASSET_STORAGE_DRIVER: z.enum(["local", "blob", "s3"]).default("local"),
