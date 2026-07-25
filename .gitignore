@@ -1,0 +1,32 @@
+# Secrets
+.env
+.env.local
+.env.*.local
+
+# Dependencies and builds
+node_modules/
+.next/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Generated assets and local services
+storage/
+uploads/
+renders/
+*.log
+.redis/
+
+# Editors and OS
+.vscode/settings.json
+.idea/
+.DS_Store
+Thumbs.db
+
+.vercel
+.env*
+
+# Locally installed agent tooling (not part of the app)
+.agents/
+.claude/
+skills-lock.json

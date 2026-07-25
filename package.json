@@ -1,0 +1,41 @@
+{
+  "name": "forge-ai-unreal-studio",
+  "version": "0.2.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "drizzle-kit migrate",
+    "db:push": "drizzle-kit push",
+    "worker": "tsx --env-file=.env src/worker.ts"
+  },
+  "dependencies": {
+    "@vercel/blob": "^2.6.1",
+    "bullmq": "^5.58.5",
+    "drizzle-orm": "^0.44.5",
+    "ioredis": "^5.7.0",
+    "next": "^16.0.0",
+    "openai": "^6.3.0",
+    "postgres": "^3.4.7",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/node": "^24.7.2",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "drizzle-kit": "^0.31.5",
+    "eslint": "^9.37.0",
+    "eslint-config-next": "^16.0.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
