@@ -40,6 +40,7 @@ async function waitForTask(id: string, onProgress: (progress: number) => Promise
 
 export async function generateMeshyVehicle(
   prompt: string,
+  texturePrompt: string | undefined,
   onProgress: (percent: number, message: string) => Promise<void>
 ) {
   if (!env().MESHY_API_KEY) throw new Error("MESHY_API_KEY is not configured");
@@ -64,7 +65,8 @@ export async function generateMeshyVehicle(
       mode: "refine",
       preview_task_id: previewTask.id,
       enable_pbr: true,
-      target_formats: ["glb"]
+      target_formats: ["glb"],
+      ...(texturePrompt ? { texture_prompt: texturePrompt } : {})
     })
   });
   const refinedTask = await waitForTask(refine.result, (progress) =>

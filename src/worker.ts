@@ -31,8 +31,9 @@ const worker = new Worker(
     }
 
     const prompt = String(queueJob.data.prompt);
+    const texturePrompt = typeof queueJob.data.texturePrompt === "string" ? queueJob.data.texturePrompt : undefined;
     const projectId = String(queueJob.data.projectId);
-    const result = await generateMeshyVehicle(prompt, async (percent, message) => {
+    const result = await generateMeshyVehicle(prompt, texturePrompt, async (percent, message) => {
       await queueJob.updateProgress(percent);
       await db
         .update(jobs)

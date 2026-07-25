@@ -9,7 +9,7 @@ type StudioState = {
   messages: StudioMessage[];
 };
 type JobProgress = { percent: number; message: string };
-type PreviewAsset = { url: string; name: string };
+type CompletedAsset = { name: string };
 
 function parseSseChunk(chunk: string, onEvent: (type: string, data: Record<string, unknown>) => void) {
   for (const block of chunk.split("\n\n")) {
@@ -28,12 +28,8 @@ export function Studio() {
   const [serviceError, setServiceError] = useState<string | null>(null);
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [jobProgress, setJobProgress] = useState<JobProgress | null>(null);
-  const [previewAsset, setPreviewAsset] = useState<PreviewAsset | null>(null);
+  const [completedAsset, setCompletedAsset] = useState<CompletedAsset | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    import("@google/model-viewer");
-  }, []);
 
   useEffect(() => {
     fetch("/api/studio")
@@ -68,7 +64,7 @@ export function Studio() {
 
         setJobProgress(data.job.progress);
         if (data.job.status === "completed" && data.asset) {
-          setPreviewAsset({ url: `/api/assets/${encodeURIComponent(data.asset.storageKey)}`, name: data.asset.name });
+          setCompletedAsset({ name: data.asset.name });
           setActiveJobId(null);
           setJobProgress(null);
         } else if (data.job.status === "failed" || data.job.status === "cancelled") {
@@ -132,6 +128,7 @@ export function Studio() {
               ]);
               setActiveJobId(String(data.id));
               setJobProgress({ percent: 0, message: "Queued" });
+              setCompletedAsset(null);
             }
             if (type === "error") setServiceError(String(data.message));
           });
@@ -158,7 +155,7 @@ export function Studio() {
       </aside>
 
       <section className="workspace">
-        <header><div><span>Projects</span> / <b>{state?.project.name ?? "Apex GT"}</b></div><div className="status"><i /> Unreal bridge pending</div></header>
+        <header><div><span>Projects</span> / <b>{state?.project.name ?? "Apex GT"}</b></div><div className="status"><i /> Generated models open in Unreal Editor</div></header>
         <div className="studioGrid">
           <section className="chatPanel">
             <div className="panelTitle"><span className="aiBadge">✦</span><span><h1>Vehicle Architect</h1><p>Design, generate and stage your car in Unreal Engine</p></span></div>
@@ -189,17 +186,11 @@ export function Studio() {
                   <small>{jobProgress?.percent ?? 0}%</small>
                 </div>
               </div>
-            ) : previewAsset ? (
-              <div className="imageFrame modelFrame">
-                <model-viewer
-                  src={previewAsset.url}
-                  alt={previewAsset.name}
-                  camera-controls
-                  auto-rotate
-                  shadow-intensity="1"
-                  style={{ width: "100%", height: "100%", background: "#050609" }}
-                />
-                <span className="live">● GENERATED MODEL</span>
+            ) : completedAsset ? (
+              <div className="imageFrame emptyState">
+                <span>✓</span>
+                <b>Sent to Unreal Engine</b>
+                <small>{completedAsset.name} was imported and opened in the editor.</small>
               </div>
             ) : (
               <div className="imageFrame emptyState">
@@ -211,7 +202,7 @@ export function Studio() {
             <section className="inspector"><h2>Scene inspector</h2><div className="tabs"><b>Vehicle</b><span>Environment</span><span>Camera</span></div>
               <dl><div><dt>Body paint</dt><dd><i className="pearl" /> Pearl White</dd></div><div><dt>Wheel style</dt><dd>Turbine 21″</dd></div><div><dt>Ride height</dt><dd>−28 mm</dd></div><div><dt>Light signature</dt><dd><i className="amber" /> Amber line</dd></div></dl>
             </section>
-            <section className="pipeline"><h2>Production pipeline</h2><div><i className={state ? "ready" : ""} /><span><b>Application services</b><small>{state ? "PostgreSQL connected" : "Waiting for database"}</small></span></div><div><i /><span><b>Unreal Engine bridge</b><small>Plugin required</small></span></div></section>
+            <section className="pipeline"><h2>Production pipeline</h2><div><i className={state ? "ready" : ""} /><span><b>Application services</b><small>{state ? "PostgreSQL connected" : "Waiting for database"}</small></span></div><div><i className={activeJobId || completedAsset ? "ready" : ""} /><span><b>Unreal Editor import</b><small>Runs automatically on the worker&apos;s machine</small></span></div></section>
           </aside>
         </div>
       </section>

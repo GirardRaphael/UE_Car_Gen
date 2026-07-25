@@ -7,6 +7,4 @@
 .generatingState{display:grid;place-items:center;gap:4px}
 .spinner{width:26px;height:26px;border:2px solid #2a323b;border-top-color:var(--amber);border-radius:50%;animation:forge-spin .8s linear infinite}
 @keyframes forge-spin{to{transform:rotate(360deg)}}
-.imageFrame.modelFrame{padding:0;background:#050609}
-.imageFrame.modelFrame model-viewer{display:block}
-.imageFrame.emptyState,.imageFrame.generating,.imageFrame.modelFrame{cursor:default}
+.imageFrame.emptyState,.imageFrame.generating{cursor:default}
