@@ -17,8 +17,15 @@ const envSchema = z.object({
   ),
   // Optional until the ForgeAIBridge Unreal plugin (Phase 4) lands and actually reads these.
   UNREAL_BRIDGE_WS_URL: z.string().url().optional(),
+  // When set, the worker launches this project in Unreal Editor and imports each
+  // finished GLB automatically. Only meaningful when the worker runs on the same
+  // machine as the Unreal install.
   UNREAL_PROJECT_PATH: z.string().min(1).optional(),
-  UNREAL_CONTENT_ROOT: z.string().startsWith("/Game/").optional(),
+  UNREAL_CONTENT_ROOT: z.string().startsWith("/Game/").default("/Game/ForgeAI"),
+  // Optional override for the UnrealEditor(-Cmd).exe path. If unset, it's derived
+  // from the .uproject's EngineAssociation under the standard Epic Games Launcher
+  // install location.
+  UNREAL_EDITOR_EXE: z.string().optional(),
   S3_ENDPOINT: z.string().optional(),
   S3_REGION: z.string().optional(),
   S3_BUCKET: z.string().optional(),

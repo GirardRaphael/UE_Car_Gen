@@ -6,8 +6,19 @@ import { assets, jobs } from "@/server/db/schema";
 import { env } from "@/server/env";
 import { generateMeshyVehicle } from "@/server/providers/meshy";
 import { storage } from "@/server/storage";
+import { openGlbInUnrealEditor } from "@/server/unreal/openInEditor";
 
-const connection = new IORedis(env().REDIS_URL, { maxRetriesPerRequest: null });
+// maxRetriesPerRequest stays null (required for BullMQ's blocking reads), but
+// connectTimeout + retryStrategy + an error listener keep a broken connection
+// from failing silently — without these, a network issue looks identical to
+// "no jobs queued" from the outside.
+const connection = new IORedis(env().REDIS_URL, {
+  maxRetriesPerRequest: null,
+  connectTimeout: 10_000,
+  retryStrategy: (times) => Math.min(times * 1_000, 10_000)
+});
+connection.on("error", (error) => console.error("[worker] Redis connection error:", error.message));
+connection.on("ready", () => console.log("[worker] Redis connection ready"));
 
 const worker = new Worker(
   "forge-generation",
@@ -56,6 +67,13 @@ const worker = new Worker(
         updatedAt: new Date()
       })
       .where(eq(jobs.id, databaseJobId));
+
+    try {
+      await openGlbInUnrealEditor(bytes, `vehicle_${result.providerTaskId}`);
+    } catch (error) {
+      console.error("[unreal] Unexpected error launching Unreal Editor:", error);
+    }
+
     return { assetId: asset.id };
   },
   { connection, concurrency: 2 }
