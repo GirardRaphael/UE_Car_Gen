@@ -10,8 +10,8 @@ Forge AI will turn a natural-language vehicle brief into a tracked generation jo
 Browser UI
    │ HTTPS / server events
    ▼
-Forge API + agent orchestrator ─── PostgreSQL
-   │          │                    Redis job queue
+Forge API + agent orchestrator ─── PostgreSQL (jobs table)
+   │          │                    Vercel Function (waitUntil, no separate worker)
    │          └── 3D provider ─── GLB/FBX + textures
    │
    └── authenticated WebSocket

@@ -1,14 +1,19 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { waitUntil } from "@vercel/functions";
 import { asc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/server/db";
 import { conversations, jobs, messages } from "@/server/db/schema";
 import { env } from "@/server/env";
-import { generationQueue } from "@/server/queue";
+import { processGenerationJob } from "@/server/generation";
 import { forgeTools } from "@/server/tools";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+// Generous ceiling so a queued vehicle generation (Meshy preview + refine +
+// GLB download, run via waitUntil after the SSE response closes) has room to
+// finish — the request itself returns in seconds; this bounds the background
+// work Vercel keeps the function alive for.
+export const maxDuration = 800;
 
 const inputSchema = z.object({
   projectId: z.string().uuid(),
@@ -77,24 +82,16 @@ export async function POST(request: Request) {
               .insert(jobs)
               .values({ projectId, type: block.name, input: args })
               .returning();
-            try {
-              await generationQueue.add(
-                block.name,
-                { databaseJobId: job.id, projectId, ...args },
-                { jobId: job.id }
-              );
-              controller.enqueue(event("tool", { id: job.id, name: block.name, status: "queued" }));
-            } catch (queueError) {
-              await db
-                .update(jobs)
-                .set({
-                  status: "failed",
-                  error: queueError instanceof Error ? queueError.message : "Could not queue job",
-                  updatedAt: new Date()
-                })
-                .where(eq(jobs.id, job.id));
-              throw queueError;
-            }
+            controller.enqueue(event("tool", { id: job.id, name: block.name, status: "queued" }));
+            waitUntil(
+              processGenerationJob({
+                databaseJobId: job.id,
+                projectId,
+                toolName: block.name,
+                prompt: String(args.prompt ?? ""),
+                texturePrompt: typeof args.texturePrompt === "string" ? args.texturePrompt : undefined
+              })
+            );
           }
         }
 

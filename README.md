@@ -1,6 +1,6 @@
 # Forge AI — Unreal Vehicle Studio
 
-Forge AI is a TypeScript production foundation for generating vehicle concepts through conversation, creating real GLB assets with Meshy, storing project history in PostgreSQL, processing durable jobs with Redis/BullMQ, and preparing those assets for an Unreal Engine editor bridge.
+Forge AI is a TypeScript production foundation for generating vehicle concepts through conversation, creating real GLB assets with Meshy, storing project history in PostgreSQL, and preparing those assets for an Unreal Engine editor bridge.
 
 ## Included
 
@@ -10,19 +10,18 @@ Forge AI is a TypeScript production foundation for generating vehicle concepts t
 - Multiple projects, each with multiple chat conversations, switchable from the sidebar
 - Vehicle customization panel (paint color, finish, wheels, trim, ride height, light signature) that feeds directly into the generation prompt
 - PostgreSQL persistence through Drizzle ORM
-- Redis/BullMQ generation queue and standalone worker
-- Meshy Text-to-3D preview + PBR refinement pipeline
+- Meshy Text-to-3D preview + PBR refinement pipeline, run in the background of the chat request itself (see "Request flow") — no separate worker process or queue to host
 - SHA-256 verified local/Blob asset storage
 - Health and persisted studio APIs
-- Docker Compose for local PostgreSQL and Redis (optional — see below)
+- Docker Compose for local PostgreSQL (optional — see below)
 - Standalone production build configuration
 
 ## Local setup
 
 1. Copy `.env.example` to `.env` and fill in real values. Never commit `.env`.
-   `DATABASE_URL`/`REDIS_URL` can point at the local Docker services below, or
-   at hosted services (e.g. Neon + Upstash) — nothing else changes.
-2. Start application services (skip if using hosted Postgres/Redis instead):
+   `DATABASE_URL` can point at the local Docker Postgres below, or a hosted
+   database (e.g. Neon) — nothing else changes.
+2. Start application services (skip if using a hosted Postgres instead):
 
    ```powershell
    docker compose up -d
@@ -52,13 +51,9 @@ Forge AI is a TypeScript production foundation for generating vehicle concepts t
    npm run dev
    ```
 
-6. In a second terminal, start the durable worker:
-
-   ```powershell
-   npm run worker
-   ```
-
 Open `http://localhost:3000`. Service health is available at `http://localhost:3000/api/health`.
+There's no separate worker to start — vehicle generation runs in the background
+of the `/api/chat` request itself (see "Request flow" below).
 
 ## Request flow
 
@@ -68,18 +63,33 @@ Open `http://localhost:3000`. Service health is available at `http://localhost:3
    line is appended to the message so it's visible in the transcript and part
    of what the model sees — nothing is applied silently.
 2. The server calls the Anthropic Claude Messages API and streams text/tool events to the browser.
-3. A `generate_vehicle_asset` tool call creates both a PostgreSQL job and BullMQ queue item.
-4. The worker asks Meshy for preview geometry and then PBR refinement.
-5. The worker downloads the GLB, computes its checksum, stores it, and creates
-   an asset record named from the prompt (e.g. `low-wide-retro-coupe-a1b2c3.glb`)
-   so it's identifiable in the UI and asset storage, not just a task id.
-6. If `UNREAL_PROJECT_PATH` is set, the worker launches Unreal Editor on its own
-   machine and runs a Python import script against the GLB (best-effort — the
-   job is not blocked or failed by this step, and its outcome is recorded on
-   the job separately from the model-generation result).
+3. A `generate_vehicle_asset` tool call creates a PostgreSQL job row, then hands
+   it to `processGenerationJob` (`src/server/generation.ts`) via Vercel's
+   `waitUntil` — the SSE response finishes and closes normally (with a
+   `"queued"` tool event) while generation keeps running server-side in the
+   background. The client learns about progress and completion entirely by
+   polling `/api/jobs/[id]`, which already reads live job state from Postgres.
+4. That background job asks Meshy for preview geometry and then PBR refinement,
+   updating the job's `progress` in Postgres after each poll.
+5. It downloads the GLB, computes its checksum, stores it, and creates an asset
+   record named from the prompt (e.g. `low-wide-retro-coupe-a1b2c3.glb`) so
+   it's identifiable in the UI and asset storage, not just a task id.
+6. If `UNREAL_PROJECT_PATH` is set (only meaningful when `npm run dev` runs on
+   the same machine as your Unreal install — the production deployment has no
+   local Unreal to launch), it launches Unreal Editor and runs a Python import
+   script against the GLB. This is best-effort: it never blocks or fails the
+   generation job, and its outcome is recorded on the job separately from the
+   model-generation result.
 7. The future Unreal bridge (Phase 4) will replace this local launch with an
-   authenticated WebSocket connection so the worker doesn't need to run on the
-   same machine as Unreal.
+   authenticated WebSocket connection so importing doesn't depend on Unreal
+   running on the same machine as whatever processes the job.
+
+Because generation runs inside the `/api/chat` invocation's extended
+(`waitUntil`) lifetime, that route sets `export const maxDuration = 800` —
+comfortably above typical Meshy turnaround, but still a hard ceiling. A
+generation that runs longer than that gets killed mid-flight and its job is
+left stuck in `"running"` rather than marked `"failed"`; there's no resume
+path for that case yet.
 
 ## Projects and conversations
 
@@ -92,38 +102,31 @@ corresponding `projectId`/`conversationId` query params.
 
 ## Production deployment
 
-**Live**: https://ue-car-gen.vercel.app (web app + API routes, Vercel project
-`ue-car-gen`). The worker (`npm run worker`) is not deployed there — see below
-for why — so generation jobs only complete while it's running somewhere.
+**Live**: https://ue-car-gen.vercel.app (Vercel project `ue-car-gen`). Both the
+web app and vehicle generation run entirely on Vercel Functions — there's no
+separate worker process to host anywhere.
 
-The web app (chat UI + API routes) deploys to Vercel. The generation worker
-(`npm run worker`) holds a persistent BullMQ connection and **cannot run as a
-Vercel serverless function** — run it anywhere with a long-lived process (your
-own machine, a small VPS, Railway, Fly.io, etc.), pointed at the same
-production `DATABASE_URL` / `REDIS_URL`.
-
-1. Provision PostgreSQL and Redis reachable from both Vercel and the worker
-   host (e.g. Neon + Upstash). Apply every file in `drizzle/`, in order,
-   against the production database.
+1. Provision PostgreSQL reachable from Vercel (e.g. Neon). Apply every file in
+   `drizzle/`, in order, against the production database.
 2. Set `ASSET_STORAGE_DRIVER=blob` and `BLOB_READ_WRITE_TOKEN` (from a Vercel
-   Blob store) in every environment that runs the web app or the worker — the
-   `local` filesystem driver only works when both share one machine.
-3. Set `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `MESHY_API_KEY`,
-   `DATABASE_URL`, `REDIS_URL` in the Vercel project (Production + Preview)
-   and in the worker host's `.env`.
+   Blob store) — the `local` filesystem driver has no shared disk across
+   Vercel Function invocations, so it only works for `npm run dev`.
+3. Set `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL`, `MESHY_API_KEY`, `DATABASE_URL`
+   in the Vercel project (Production + Preview).
 4. Deploy with `vercel deploy --prod`.
-5. Start the worker wherever it runs: `npm run worker`.
 
 Note: there is currently no per-user authentication, project ownership, or
 credential encryption — every deployment is a single shared workspace with one
 project. See Phase 1 and Phase 6 of `IMPLEMENTATION_PLAN.md` for what's still
 needed before this is a real multi-user product.
 
-`UNREAL_PROJECT_PATH`, `UNREAL_CONTENT_ROOT`, and `UNREAL_EDITOR_EXE` are read
-today by the worker's best-effort auto-import (see "Request flow" above) —
-set them if the worker runs on the same machine as your Unreal install.
-`UNREAL_BRIDGE_TOKEN` and `UNREAL_BRIDGE_WS_URL` remain unused until the
-`ForgeAIBridge` plugin (Phase 4) exists.
+`UNREAL_PROJECT_PATH`, `UNREAL_CONTENT_ROOT`, and `UNREAL_EDITOR_EXE` only do
+anything when `npm run dev` runs on the same machine as an Unreal install —
+Vercel's production deployment has no local Unreal to launch, so generated
+models there never get auto-imported; that step is silently skipped (recorded
+on the job as `unrealImport: { status: "skipped", ... }`, shown honestly in
+the UI). `UNREAL_BRIDGE_TOKEN` and `UNREAL_BRIDGE_WS_URL` remain unused until
+the `ForgeAIBridge` plugin (Phase 4) exists to receive imports remotely.
 
 ## Unreal project requirements
 

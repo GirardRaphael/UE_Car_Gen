@@ -4,7 +4,6 @@ const envSchema = z.object({
   ANTHROPIC_API_KEY: z.string().min(20),
   ANTHROPIC_MODEL: z.string().default("claude-opus-4-8"),
   DATABASE_URL: z.string().url(),
-  REDIS_URL: z.string().url(),
   ASSET_STORAGE_DRIVER: z.enum(["local", "blob", "s3"]).default("local"),
   ASSET_STORAGE_PATH: z.string().default("./storage"),
   BLOB_READ_WRITE_TOKEN: z.string().optional(),

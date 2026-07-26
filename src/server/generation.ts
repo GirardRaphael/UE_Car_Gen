@@ -1,24 +1,10 @@
-import { Worker } from "bullmq";
 import { eq } from "drizzle-orm";
-import IORedis from "ioredis";
 import { db } from "@/server/db";
 import { assets, jobs } from "@/server/db/schema";
 import { env } from "@/server/env";
 import { generateMeshyVehicle } from "@/server/providers/meshy";
 import { storage } from "@/server/storage";
 import { openGlbInUnrealEditor, type UnrealImportResult } from "@/server/unreal/openInEditor";
-
-// maxRetriesPerRequest stays null (required for BullMQ's blocking reads), but
-// connectTimeout + retryStrategy + an error listener keep a broken connection
-// from failing silently — without these, a network issue looks identical to
-// "no jobs queued" from the outside.
-const connection = new IORedis(env().REDIS_URL, {
-  maxRetriesPerRequest: null,
-  connectTimeout: 10_000,
-  retryStrategy: (times) => Math.min(times * 1_000, 10_000)
-});
-connection.on("error", (error) => console.error("[worker] Redis connection error:", error.message));
-connection.on("ready", () => console.log("[worker] Redis connection ready"));
 
 // Turns "a low, wide retro-futuristic coupe with..." into "low-wide-retro-futuristic" —
 // a short, human-readable prefix so asset names mean something at a glance, with the
@@ -33,25 +19,30 @@ function slugifyPrompt(prompt: string): string {
   return words.join("-") || "vehicle";
 }
 
-const worker = new Worker(
-  "forge-generation",
-  async (queueJob) => {
-    const databaseJobId = String(queueJob.data.databaseJobId);
+export type GenerationInput = {
+  databaseJobId: string;
+  projectId: string;
+  toolName: string;
+  prompt: string;
+  texturePrompt?: string;
+};
+
+// Runs a full vehicle-generation job to completion: Meshy preview + refine,
+// GLB download, asset storage, and a best-effort Unreal Editor import. Always
+// updates the job row's status/progress/error itself — callers don't need to.
+export async function processGenerationJob(input: GenerationInput): Promise<void> {
+  const { databaseJobId, projectId, toolName, prompt, texturePrompt } = input;
+  try {
     await db.update(jobs).set({ status: "running", updatedAt: new Date() }).where(eq(jobs.id, databaseJobId));
 
-    if (queueJob.name !== "generate_vehicle_asset") {
-      throw new Error(`Worker does not support ${queueJob.name} yet`);
+    if (toolName !== "generate_vehicle_asset") {
+      throw new Error(`Generation does not support "${toolName}" yet`);
     }
-
     if (env().MODEL_GENERATION_PROVIDER !== "meshy") {
       throw new Error(`3D provider "${env().MODEL_GENERATION_PROVIDER}" is not implemented yet — only "meshy" is supported`);
     }
 
-    const prompt = String(queueJob.data.prompt);
-    const texturePrompt = typeof queueJob.data.texturePrompt === "string" ? queueJob.data.texturePrompt : undefined;
-    const projectId = String(queueJob.data.projectId);
     const result = await generateMeshyVehicle(prompt, texturePrompt, async (percent, message) => {
-      await queueJob.updateProgress(percent);
       await db
         .update(jobs)
         .set({ progress: { percent, message }, updatedAt: new Date() })
@@ -93,27 +84,14 @@ const worker = new Worker(
         updatedAt: new Date()
       })
       .where(eq(jobs.id, databaseJobId));
-
-    return { assetId: asset.id, unrealImport };
-  },
-  { connection, concurrency: 2 }
-);
-
-worker.on("failed", async (queueJob, error) => {
-  if (!queueJob) return;
-  await db
-    .update(jobs)
-    .set({ status: "failed", error: error.message, updatedAt: new Date() })
-    .where(eq(jobs.id, String(queueJob.data.databaseJobId)));
-});
-
-console.log("Forge generation worker is running");
-
-async function shutdown() {
-  await worker.close();
-  await connection.quit();
-  process.exit(0);
+  } catch (error) {
+    await db
+      .update(jobs)
+      .set({
+        status: "failed",
+        error: error instanceof Error ? error.message : "Generation failed",
+        updatedAt: new Date()
+      })
+      .where(eq(jobs.id, databaseJobId));
+  }
 }
-
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
