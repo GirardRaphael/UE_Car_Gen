@@ -91,6 +91,8 @@ export function Studio() {
   const [creatingProject, setCreatingProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const bootstrappedRef = useRef(false);
 
   useEffect(() => {
     const params = new URLSearchParams();
@@ -98,21 +100,40 @@ export function Studio() {
     if (activeConversationId) params.set("conversationId", activeConversationId);
     let cancelled = false;
 
-    fetch(`/api/studio?${params}`)
-      .then(async (response) => {
+    (async () => {
+      try {
+        const response = await fetch(`/api/studio?${params}`);
         if (!response.ok) throw new Error("Start PostgreSQL and run the database migration.");
-        return response.json() as Promise<StudioState>;
-      })
-      .then((data) => {
+        let data = (await response.json()) as StudioState;
+        if (cancelled) return;
+
+        // Only on the very first load (not on explicit project/conversation
+        // switches) — start a brand-new conversation instead of resuming
+        // whatever was last active, so refreshing the page clears the chat
+        // rather than resurrecting old messages.
+        const isInitialLoad = !bootstrappedRef.current && !activeConversationId;
+        bootstrappedRef.current = true;
+        if (isInitialLoad) {
+          const createResponse = await fetch("/api/conversations", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ projectId: data.project.id })
+          });
+          if (createResponse.ok) {
+            const conversation = (await createResponse.json()) as ConversationSummary;
+            data = { ...data, conversation, conversations: [conversation, ...data.conversations], messages: [] };
+          }
+        }
+
         if (cancelled) return;
         setState(data);
         setMessages(data.messages);
         setActiveProjectId(data.project.id);
         setActiveConversationId(data.conversation.id);
-      })
-      .catch((error: Error) => {
-        if (!cancelled) setServiceError(error.message);
-      });
+      } catch (error) {
+        if (!cancelled) setServiceError(error instanceof Error ? error.message : "Could not load studio");
+      }
+    })();
 
     return () => {
       cancelled = true;
@@ -120,7 +141,15 @@ export function Studio() {
   }, [activeProjectId, activeConversationId]);
 
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: "smooth" });
+    // Only auto-scroll if the user is already near the bottom — otherwise
+    // every streamed token would yank them back down while they're trying to
+    // scroll up and read earlier messages.
+    const container = messagesContainerRef.current;
+    if (!container) return;
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    if (distanceFromBottom < 120) {
+      endRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
   }, [messages]);
 
   useEffect(() => {
@@ -254,8 +283,12 @@ export function Studio() {
     }
   }
 
-  async function sendMessage(event: FormEvent) {
+  function sendMessage(event: FormEvent) {
     event.preventDefault();
+    void submitMessage();
+  }
+
+  async function submitMessage() {
     const content = input.trim();
     if (!content || !state || streaming) return;
     const customizationLine = describeCustomization(customization);
@@ -379,7 +412,7 @@ export function Studio() {
           <section className="chatPanel">
             <div className="panelTitle"><span className="aiBadge">✦</span><span><h1>Vehicle Architect</h1><p>Design, generate and stage your car in Unreal Engine</p></span></div>
             {serviceError && <div className="errorBanner"><b>Service setup required</b><span>{serviceError}</span></div>}
-            <div className="messages">
+            <div className="messages" ref={messagesContainerRef}>
               {!messages.length && <div className="welcome"><span>✦</span><h2>What should we build?</h2><p>Describe a vehicle concept, materials, stance, and cinematic environment.</p></div>}
               {messages.map((message) => (
                 <article key={message.id} className={`message ${message.role}`}>
@@ -390,7 +423,17 @@ export function Studio() {
               <div ref={endRef} />
             </div>
             <form className="composer" onSubmit={sendMessage}>
-              <textarea value={input} onChange={(event) => setInput(event.target.value)} placeholder="Describe a vehicle or scene change…" />
+              <textarea
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    void submitMessage();
+                  }
+                }}
+                placeholder="Describe a vehicle or scene change… (Enter to send, Shift+Enter for a new line)"
+              />
               <div><span>✦ Agent mode</span><button disabled={!state || streaming}>{streaming ? "…" : "↑"}</button></div>
             </form>
           </section>
