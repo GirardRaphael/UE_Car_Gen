@@ -8,7 +8,7 @@ Forge AI is a TypeScript production foundation for generating vehicle concepts t
 - Server-only environment validation
 - Anthropic Claude (Messages API) with streamed SSE output and strict tools
 - Multiple projects, each with multiple chat conversations, switchable from the sidebar
-- Vehicle customization panel (paint color wheel, finish, wheels, trim, ride height, light signature) that feeds directly into the generation prompt
+- Vehicle customization panel (paint color, finish, wheels, trim, ride height, light signature) that feeds directly into the generation prompt
 - PostgreSQL persistence through Drizzle ORM
 - Redis/BullMQ generation queue and standalone worker
 - Meshy Text-to-3D preview + PBR refinement pipeline
@@ -63,7 +63,7 @@ Open `http://localhost:3000`. Service health is available at `http://localhost:3
 ## Request flow
 
 1. `POST /api/chat` validates the project conversation and persists the user message.
-   If the vehicle customization panel (paint color wheel, finish, wheels, trim,
+   If the vehicle customization panel (paint color, finish, wheels, trim,
    ride height, light signature) has any fields set, a `[Customization: …]`
    line is appended to the message so it's visible in the transcript and part
    of what the model sees — nothing is applied silently.
@@ -91,6 +91,10 @@ within the current project. Switching either refetches `/api/studio` with the
 corresponding `projectId`/`conversationId` query params.
 
 ## Production deployment
+
+**Live**: https://ue-car-gen.vercel.app (web app + API routes, Vercel project
+`ue-car-gen`). The worker (`npm run worker`) is not deployed there — see below
+for why — so generation jobs only complete while it's running somewhere.
 
 The web app (chat UI + API routes) deploys to Vercel. The generation worker
 (`npm run worker`) holds a persistent BullMQ connection and **cannot run as a
