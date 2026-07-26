@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { head, put } from "@vercel/blob";
+import { get as blobGet, put } from "@vercel/blob";
 import { env } from "@/server/env";
 
 export type StoredObject = {
@@ -44,7 +44,9 @@ class BlobAssetStorage implements AssetStorage {
     if (!token) throw new Error("BLOB_READ_WRITE_TOKEN is not configured");
     const date = new Date().toISOString().slice(0, 10);
     const key = `${date}/${randomUUID()}.${extension.replace(/^\./, "")}`;
-    await put(key, Buffer.from(data), { access: "public", addRandomSuffix: false, token });
+    // "private" matches how this project's Blob store is actually configured —
+    // "public" fails outright with "Cannot use public access on a private store."
+    await put(key, Buffer.from(data), { access: "private", addRandomSuffix: false, token });
     return {
       key,
       checksum: createHash("sha256").update(data).digest("hex"),
@@ -55,10 +57,25 @@ class BlobAssetStorage implements AssetStorage {
   async get(key: string): Promise<Uint8Array> {
     const token = env().BLOB_READ_WRITE_TOKEN;
     if (!token) throw new Error("BLOB_READ_WRITE_TOKEN is not configured");
-    const blob = await head(key, { token });
-    const response = await fetch(blob.url);
-    if (!response.ok) throw new Error(`Could not read blob (${response.status})`);
-    return new Uint8Array(await response.arrayBuffer());
+    // A private blob's URL isn't fetchable without auth, so use @vercel/blob's
+    // get() (it attaches the token) rather than head()+fetch(blob.url).
+    const result = await blobGet(key, { access: "private", token });
+    if (!result) throw new Error(`Blob not found: ${key}`);
+    if (result.statusCode !== 200) throw new Error(`Unexpected blob response for ${key}: ${result.statusCode}`);
+    const reader = result.stream.getReader();
+    const chunks: Uint8Array[] = [];
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value) chunks.push(value);
+    }
+    const bytes = new Uint8Array(chunks.reduce((total, chunk) => total + chunk.byteLength, 0));
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return bytes;
   }
 }
 
