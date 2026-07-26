@@ -2,6 +2,7 @@
 .env
 .env.local
 .env.*.local
+unreal-bridge/forge_bridge_config.json
 
 # Dependencies and builds
 node_modules/
@@ -9,6 +10,7 @@ node_modules/
 dist/
 coverage/
 *.tsbuildinfo
+__pycache__/
 
 # Generated assets and local services (root-level only — do not shadow src/server/storage/)
 /storage/

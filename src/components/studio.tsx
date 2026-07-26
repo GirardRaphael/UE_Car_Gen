@@ -16,6 +16,8 @@ type JobProgress = { percent: number; message: string };
 type UnrealImportStatus =
   | { status: "skipped"; reason: string }
   | { status: "launched" }
+  | { status: "pending" }
+  | { status: "imported" }
   | { status: "error"; message: string };
 type CompletedAsset = { name: string; unrealImport?: UnrealImportStatus };
 
@@ -33,10 +35,17 @@ function describeUnrealImport(unrealImport: UnrealImportStatus | undefined): { t
   switch (unrealImport.status) {
     case "launched":
       return { title: "Sent to Unreal Engine", detail: "Unreal Editor was launched to import this model." };
+    case "pending":
+      return {
+        title: "Model generated",
+        detail: "Waiting for the Unreal bridge on your machine to import this — open the Editor with the bridge script running."
+      };
+    case "imported":
+      return { title: "Imported into Unreal", detail: "Your Unreal bridge confirmed the import." };
     case "skipped":
       return { title: "Model generated", detail: `Unreal import skipped: ${unrealImport.reason}` };
     case "error":
-      return { title: "Model generated", detail: `Unreal import failed to launch: ${unrealImport.message}` };
+      return { title: "Model generated", detail: `Unreal import failed: ${unrealImport.message}` };
   }
 }
 
@@ -119,18 +128,30 @@ export function Studio() {
 
     let cancelled = false;
     const startedAt = Date.now();
+    let completedAt: number | null = null;
     // The server request that runs generation is capped at 300s (Vercel Hobby
     // plan's maxDuration ceiling — see api/chat/route.ts); past that the job
     // is left stuck in "running" with no more updates coming. Give a little
     // margin for the initial request round-trip, then stop polling and say so
     // honestly instead of spinning forever.
     const GENERATION_TIMEOUT_MS = 320_000;
+    // Once Meshy's model itself is done, a configured Unreal bridge only
+    // finishes the import once you actually have the Editor open running the
+    // bridge script — that's bounded by you, not the server, so give it much
+    // longer before giving up on refreshing this specific status.
+    const BRIDGE_TIMEOUT_MS = 900_000;
 
     const poll = async () => {
-      if (Date.now() - startedAt > GENERATION_TIMEOUT_MS) {
+      const elapsedSinceStart = Date.now() - startedAt;
+      const elapsedSinceCompleted = completedAt ? Date.now() - completedAt : 0;
+      if (!completedAt && elapsedSinceStart > GENERATION_TIMEOUT_MS) {
         setServiceError("Vehicle generation is taking longer than the server allows and may not complete. Try again.");
         setActiveJobId(null);
         setJobProgress(null);
+        return;
+      }
+      if (completedAt && elapsedSinceCompleted > BRIDGE_TIMEOUT_MS) {
+        setActiveJobId(null);
         return;
       }
       try {
@@ -147,15 +168,20 @@ export function Studio() {
         };
         if (cancelled) return;
 
-        setJobProgress(data.job.progress);
         if (data.job.status === "completed" && data.asset) {
-          setCompletedAsset({ name: data.asset.name, unrealImport: data.job.output?.unrealImport });
-          setActiveJobId(null);
+          const unrealImport = data.job.output?.unrealImport;
+          setCompletedAsset({ name: data.asset.name, unrealImport });
           setJobProgress(null);
+          if (!completedAt) completedAt = Date.now();
+          if (!unrealImport || unrealImport.status !== "pending") {
+            setActiveJobId(null);
+          }
         } else if (data.job.status === "failed" || data.job.status === "cancelled") {
           setServiceError(data.job.error ?? "Vehicle generation failed");
           setActiveJobId(null);
           setJobProgress(null);
+        } else {
+          setJobProgress(data.job.progress);
         }
       } catch (error) {
         if (!cancelled) setServiceError(error instanceof Error ? error.message : "Job status unavailable");
@@ -371,7 +397,7 @@ export function Studio() {
 
           <aside className="previewPanel">
             <div className="previewTabs"><b>Preview</b><span>Details</span></div>
-            {activeJobId ? (
+            {activeJobId && !completedAsset ? (
               <div className="imageFrame generating">
                 <div className="generatingState">
                   <span className="spinner" />
@@ -490,10 +516,17 @@ export function Studio() {
                 <span><b>Application services</b><small>{state ? "PostgreSQL connected" : "Waiting for database"}</small></span>
               </div>
               <div>
-                <i className={completedAsset?.unrealImport?.status === "launched" ? "ready" : ""} />
+                <i
+                  className={
+                    completedAsset?.unrealImport?.status === "launched" ||
+                    completedAsset?.unrealImport?.status === "imported"
+                      ? "ready"
+                      : ""
+                  }
+                />
                 <span>
                   <b>Unreal Editor import</b>
-                  <small>{completedAsset ? describeUnrealImport(completedAsset.unrealImport).detail : "Runs automatically on the worker's machine"}</small>
+                  <small>{completedAsset ? describeUnrealImport(completedAsset.unrealImport).detail : "Runs when a model finishes generating"}</small>
                 </span>
               </div>
             </section>

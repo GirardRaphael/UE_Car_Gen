@@ -68,12 +68,18 @@ export async function processGenerationJob(input: GenerationInput): Promise<void
       })
       .returning();
 
-    const unrealImport = await openGlbInUnrealEditor(bytes, assetName.replace(/\.glb$/, "")).catch(
+    let unrealImport = await openGlbInUnrealEditor(bytes, assetName.replace(/\.glb$/, "")).catch(
       (error): UnrealImportResult => ({
         status: "error",
         message: error instanceof Error ? error.message : "Unexpected error launching Unreal Editor"
       })
     );
+    // No local Unreal to launch here (typically: this is running on Vercel,
+    // not your machine) — if a bridge token is configured, queue it for the
+    // bridge running inside your Editor instead of giving up.
+    if (unrealImport.status === "skipped" && env().UNREAL_BRIDGE_TOKEN) {
+      unrealImport = { status: "pending" };
+    }
 
     await db
       .update(jobs)

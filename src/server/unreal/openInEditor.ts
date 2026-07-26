@@ -80,12 +80,18 @@ else:
 }
 
 // Discriminated result so callers (and the UI) can tell the difference between
-// "not configured", "failed to launch", and "launched" — there is no feedback
-// channel back from the detached Unreal process, so "launched" is the strongest
-// claim we can honestly make; it does not mean the import inside Unreal succeeded.
+// "not configured", "failed to launch", "launched", and — once a remote bridge
+// is involved — "waiting for a bridge to pick it up" / "the bridge confirmed
+// the import". There is no feedback channel back from the detached local
+// Unreal process, so "launched" is the strongest claim we can honestly make
+// for that path; it does not mean the import inside Unreal succeeded. Bridge
+// imports go through /api/bridge/jobs/[id]/report instead, so "imported" is a
+// real confirmation.
 export type UnrealImportResult =
   | { status: "skipped"; reason: string }
   | { status: "launched" }
+  | { status: "pending" }
+  | { status: "imported" }
   | { status: "error"; message: string };
 
 /**

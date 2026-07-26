@@ -14,16 +14,15 @@ Forge API + agent orchestrator ─── PostgreSQL (jobs table)
    │          │                    Vercel Function (waitUntil, no separate worker)
    │          └── 3D provider ─── GLB/FBX + textures
    │
-   └── authenticated WebSocket
+   └── bearer-token HTTP poll (today) / authenticated WebSocket (planned)
              ▲
-      Unreal Bridge plugin
+      Unreal Python bridge script (init_unreal.py)
              │
-      Interchange import
-      materials / actors / cameras
-      Sequencer / Movie Render Queue
+      AssetImportTask import + actor spawn (today)
+      materials / scenes / Sequencer / Movie Render Queue (planned)
 ```
 
-The browser never receives provider keys. The Unreal bridge makes an outbound authenticated connection, allowing a hosted Forge backend to communicate with an editor running on the user's machine without exposing an Unreal port to the internet.
+The browser never receives provider keys. The Unreal bridge makes an outbound authenticated connection (currently a 5s HTTP poll; a push-based WebSocket is planned), allowing a hosted Forge backend to communicate with an editor running on the user's machine without exposing an Unreal port to the internet.
 
 ## Phase 0 — Stabilize the repository
 
@@ -84,23 +83,35 @@ The browser never receives provider keys. The Unreal bridge makes an outbound au
 
 ## Phase 4 — Unreal Engine bridge
 
-1. Create a `ForgeAIBridge` Unreal editor plugin.
+**Status: a first working version is implemented**, as a deliberately smaller
+slice of the plan below — see the README's "Unreal bridge" section for setup.
+`Content/Python/init_unreal.py` polls `GET /api/bridge/jobs/next` (bearer-token
+auth) every 5s instead of holding an authenticated WebSocket, downloads the
+returned asset, imports it via `AssetImportTask` into `/Game/ForgeAI`, spawns
+it into the level, and reports success/failure to
+`POST /api/bridge/jobs/[id]/report`. This covers "generate on the live site,
+have it show up in your Unreal project" end to end. Not yet built: a real
+plugin (this is a plain Python startup script, not a packaged
+`ForgeAIBridge` plugin), materials/scenes/Sequencer/render commands, and
+rollback-aware multi-step jobs — those remain the items below and in Phase 5.
+
+1. Package `ForgeAIBridge` as a proper Unreal editor plugin (currently a plain
+   `Content/Python/init_unreal.py` script).
 2. Enable and verify:
    - Python Editor Script Plugin;
    - Editor Scripting Utilities;
    - Interchange Framework/Editor;
    - Remote Control API;
    - Movie Render Queue.
-3. Establish an authenticated outbound WebSocket connection to Forge.
+3. Replace the 5s HTTP poll with an authenticated outbound WebSocket
+   connection to Forge (push-based, lower latency; `UNREAL_BRIDGE_WS_URL` is
+   reserved for this).
 4. Add heartbeat, engine/project metadata, reconnect, and command acknowledgement.
 5. Implement an allow-listed command dispatcher; never execute arbitrary Python supplied by the model.
-6. Implement bridge commands:
+6. Implement bridge commands beyond basic import:
    - health and project inspection;
-   - asset download and hash verification;
-   - Interchange import into `/Game/ForgeAI/<Project>/<Version>`;
    - material instance creation and texture assignment;
    - Nanite, collision, LOD, scale, and pivot configuration;
-   - actor spawning and transforms;
    - lights, sky, fog, post-process, camera, and Sequencer;
    - save package/level;
    - Movie Render Queue execution;

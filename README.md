@@ -75,14 +75,15 @@ of the `/api/chat` request itself (see "Request flow" below).
    record named from the prompt (e.g. `low-wide-retro-coupe-a1b2c3.glb`) so
    it's identifiable in the UI and asset storage, not just a task id.
 6. If `UNREAL_PROJECT_PATH` is set (only meaningful when `npm run dev` runs on
-   the same machine as your Unreal install — the production deployment has no
-   local Unreal to launch), it launches Unreal Editor and runs a Python import
-   script against the GLB. This is best-effort: it never blocks or fails the
-   generation job, and its outcome is recorded on the job separately from the
-   model-generation result.
-7. The future Unreal bridge (Phase 4) will replace this local launch with an
-   authenticated WebSocket connection so importing doesn't depend on Unreal
-   running on the same machine as whatever processes the job.
+   the same machine as your Unreal install), it launches Unreal Editor and
+   runs a Python import script against the GLB. This is best-effort: it never
+   blocks or fails the generation job, and its outcome is recorded on the job
+   separately from the model-generation result.
+7. Otherwise — this is always the case in production, since Vercel has no
+   local Unreal to launch — if `UNREAL_BRIDGE_TOKEN` is configured, the job is
+   marked `unrealImport: { status: "pending" }` instead of giving up. See
+   "Unreal bridge" below for how a script running inside your own Editor picks
+   these up.
 
 Because generation runs inside the `/api/chat` invocation's extended
 (`waitUntil`) lifetime, that route sets `export const maxDuration = 300` — the
@@ -127,16 +128,19 @@ project. See Phase 1 and Phase 6 of `IMPLEMENTATION_PLAN.md` for what's still
 needed before this is a real multi-user product.
 
 `UNREAL_PROJECT_PATH`, `UNREAL_CONTENT_ROOT`, and `UNREAL_EDITOR_EXE` only do
-anything when `npm run dev` runs on the same machine as an Unreal install —
-Vercel's production deployment has no local Unreal to launch, so generated
-models there never get auto-imported; that step is silently skipped (recorded
-on the job as `unrealImport: { status: "skipped", ... }`, shown honestly in
-the UI). `UNREAL_BRIDGE_TOKEN` and `UNREAL_BRIDGE_WS_URL` remain unused until
-the `ForgeAIBridge` plugin (Phase 4) exists to receive imports remotely.
+anything when `npm run dev` runs on the same machine as an Unreal install.
+Set `UNREAL_BRIDGE_TOKEN` (a long random secret, matching what your local
+bridge script uses — see below) so production generations queue for the
+bridge instead of just being skipped.
 
-## Unreal project requirements
+## Unreal bridge (remote import)
 
-Enable these plugins in `MyProject` and restart Unreal:
+Vercel Functions have no access to your PC, so the deployed site can never
+launch Unreal directly. Instead, a Python script running inside your own
+Editor polls the deployed API for finished jobs, downloads each GLB, imports
+it, and reports back — no inbound connection to your machine required.
+
+**Enable these plugins in your Unreal project and restart Unreal:**
 
 - Python Editor Script Plugin
 - Editor Scripting Utilities
@@ -145,6 +149,32 @@ Enable these plugins in `MyProject` and restart Unreal:
 - Remote Control API
 - Movie Render Queue
 
-The web application is ready for the next integration phase, but Unreal import still requires the planned `ForgeAIBridge` editor plugin. The plugin must authenticate with `UNREAL_BRIDGE_TOKEN`, expose only allow-listed commands, import GLB files through Interchange, create materials/scenes, and return render outputs.
+**Set up the bridge:**
+
+1. Copy `unreal-bridge/init_unreal.py` to `<YourProject>/Content/Python/init_unreal.py`.
+2. Copy `unreal-bridge/forge_bridge_config.example.json` to the same folder as
+   `forge_bridge_config.json`, and fill in `serverUrl` (your deployment, e.g.
+   `https://ue-car-gen.vercel.app`) and `token` (the same value as
+   `UNREAL_BRIDGE_TOKEN` in your `.env` / Vercel project settings). This file
+   holds a real secret — it's already gitignored, never commit it.
+3. Restart Unreal Editor. The Output Log should show
+   `ForgeAI bridge: polling <url> every 5s` — if it doesn't, or you see
+   `ForgeAI bridge: could not load forge_bridge_config.json`, check the plugin
+   is enabled and the config file is valid JSON in the right folder.
+4. Generate a vehicle from the live site. Progress moves from `pending` to
+   `imported` once the bridge picks it up and finishes — watch the Output Log
+   for `ForgeAI bridge: imported and spawned <name>`.
+
+**How it works:** `GET /api/bridge/jobs/next` (bearer-token auth) returns the
+oldest completed job still waiting on an import, plus a download URL for its
+asset; `POST /api/bridge/jobs/[id]/report` records the outcome. Both routes
+refuse to run at all if `UNREAL_BRIDGE_TOKEN` isn't configured — there's no
+"open" mode. This is intentionally a simple 5-second HTTP poll rather than the
+authenticated WebSocket described in `IMPLEMENTATION_PLAN.md`'s original
+Phase 4 — much less to get wrong, and easily swapped for a push-based
+connection later without changing the job/asset model. `UNREAL_BRIDGE_WS_URL`
+remains unused; it's reserved for that future push-based version. Everything
+past basic import — materials, scenes, Sequencer, Movie Render Queue — is
+still future work; see `IMPLEMENTATION_PLAN.md` Phase 5.
 
 See [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md) for the complete roadmap.
