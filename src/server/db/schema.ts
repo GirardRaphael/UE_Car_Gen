@@ -22,7 +22,7 @@ export const projects = pgTable("projects", {
 export const conversations = pgTable("conversations", {
   id: uuid("id").primaryKey().defaultRandom(),
   projectId: uuid("project_id").notNull().references(() => projects.id, { onDelete: "cascade" }),
-  openaiResponseId: text("openai_response_id"),
+  providerResponseId: text("provider_response_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow()
 });

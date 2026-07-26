@@ -10,10 +10,10 @@ dist/
 coverage/
 *.tsbuildinfo
 
-# Generated assets and local services
-storage/
-uploads/
-renders/
+# Generated assets and local services (root-level only — do not shadow src/server/storage/)
+/storage/
+/uploads/
+/renders/
 *.log
 .redis/
 
@@ -25,6 +25,7 @@ Thumbs.db
 
 .vercel
 .env*
+!.env.example
 
 # Locally installed agent tooling (not part of the app)
 .agents/

@@ -98,7 +98,10 @@ export async function POST(request: Request) {
           }
         }
 
-        await db.update(conversations).set({ updatedAt: new Date() }).where(eq(conversations.id, conversationId));
+        await db
+          .update(conversations)
+          .set({ providerResponseId: finalMessage.id, updatedAt: new Date() })
+          .where(eq(conversations.id, conversationId));
         controller.enqueue(event("done", { responseId: finalMessage.id }));
       } catch (error) {
         const message =

@@ -79,26 +79,36 @@ else:
 `;
 }
 
+// Discriminated result so callers (and the UI) can tell the difference between
+// "not configured", "failed to launch", and "launched" — there is no feedback
+// channel back from the detached Unreal process, so "launched" is the strongest
+// claim we can honestly make; it does not mean the import inside Unreal succeeded.
+export type UnrealImportResult =
+  | { status: "skipped"; reason: string }
+  | { status: "launched" }
+  | { status: "error"; message: string };
+
 /**
- * Best-effort: launches Unreal Editor with the configured project and imports the
- * generated GLB so the user can see it. Never throws — a missing/misconfigured
- * Unreal setup should not fail the generation job itself.
+ * Launches Unreal Editor with the configured project and asks it to import the
+ * generated GLB. Never throws — a missing/misconfigured Unreal setup should not
+ * fail the generation job itself — but the caller must inspect the returned
+ * status rather than assume success.
  */
-export async function openGlbInUnrealEditor(glbBytes: Uint8Array, rawAssetName: string): Promise<void> {
+export async function openGlbInUnrealEditor(glbBytes: Uint8Array, rawAssetName: string): Promise<UnrealImportResult> {
   const projectPath = env().UNREAL_PROJECT_PATH;
   if (!projectPath) {
     console.log("[unreal] UNREAL_PROJECT_PATH not set, skipping Unreal import");
-    return;
+    return { status: "skipped", reason: "UNREAL_PROJECT_PATH is not set" };
   }
   if (!existsSync(projectPath)) {
     console.error(`[unreal] Project not found at ${projectPath}, skipping Unreal import`);
-    return;
+    return { status: "skipped", reason: `Project not found at ${projectPath}` };
   }
 
   const editorExe = await resolveEditorExecutable(projectPath);
   if (!editorExe) {
     console.error("[unreal] Could not locate UnrealEditor.exe (set UNREAL_EDITOR_EXE to override), skipping Unreal import");
-    return;
+    return { status: "skipped", reason: "Could not locate UnrealEditor.exe (set UNREAL_EDITOR_EXE to override)" };
   }
 
   const assetName = sanitizeAssetName(rawAssetName);
@@ -111,10 +121,25 @@ export async function openGlbInUnrealEditor(glbBytes: Uint8Array, rawAssetName: 
   await writeFile(scriptPath, buildImportScript(glbPath, assetName, env().UNREAL_CONTENT_ROOT), "utf8");
 
   console.log(`[unreal] Launching ${editorExe} with ${projectPath}`);
-  const child = spawn(editorExe, [projectPath, `-ExecutePythonScript=${scriptPath}`], {
-    detached: true,
-    stdio: "ignore"
+  return new Promise<UnrealImportResult>((resolve) => {
+    let settled = false;
+    const settle = (result: UnrealImportResult) => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
+
+    const child = spawn(editorExe, [projectPath, `-ExecutePythonScript=${scriptPath}`], {
+      detached: true,
+      stdio: "ignore"
+    });
+    child.on("error", (error) => {
+      console.error("[unreal] Failed to launch Unreal Editor:", error.message);
+      settle({ status: "error", message: error.message });
+    });
+    child.unref();
+    // A failed spawn (e.g. ENOENT) emits its 'error' event almost immediately;
+    // if nothing fired within this window, treat the launch as successful.
+    setTimeout(() => settle({ status: "launched" }), 500);
   });
-  child.on("error", (error) => console.error("[unreal] Failed to launch Unreal Editor:", error.message));
-  child.unref();
 }
