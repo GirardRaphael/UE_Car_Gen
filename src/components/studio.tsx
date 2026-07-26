@@ -1,7 +1,6 @@
 "use client";
 
 import { FormEvent, useEffect, useRef, useState } from "react";
-import { ColorWheel } from "@/components/color-wheel";
 
 type StudioMessage = { id: string; role: "user" | "assistant" | "tool"; content: string };
 type ProjectSummary = { id: string; name: string };
@@ -383,10 +382,17 @@ export function Studio() {
               <h2>Vehicle customization</h2>
               <p className="inspectorNote">Applied to your next message below.</p>
               <div className="customizeGrid">
-                <div className="customizeRow">
+                <label className="customizeRow">
                   <span>Paint color</span>
-                  <ColorWheel onChange={(hex) => setCustomization((c) => ({ ...c, paintHex: hex }))} />
-                </div>
+                  <div className="colorPicker">
+                    <input
+                      type="color"
+                      value={customization.paintHex ?? "#888888"}
+                      onChange={(event) => setCustomization((c) => ({ ...c, paintHex: event.target.value }))}
+                    />
+                    <code>{customization.paintHex ?? "Unset"}</code>
+                  </div>
+                </label>
                 <label className="customizeRow">
                   <span>Finish</span>
                   <select

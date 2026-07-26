@@ -27,11 +27,6 @@
 .customizeGrid{display:grid;gap:12px;margin-top:6px}
 .customizeRow{display:grid;grid-template-columns:90px 1fr;align-items:center;gap:10px;font-size:10px;color:#9aa1a8}
 .customizeRow select{height:30px;border:1px solid #262c33;background:#11151a;color:inherit;border-radius:5px;padding:0 8px;font-size:10px}
-
-.colorWheelPicker{display:flex;align-items:center;gap:12px}
-.colorWheel{position:relative;border-radius:50%;cursor:crosshair;touch-action:none;flex:none}
-.colorWheelDot{position:absolute;width:14px;height:14px;border-radius:50%;border:2px solid white;box-shadow:0 0 4px rgba(0,0,0,.6);transform:translate(-50%,-50%);pointer-events:none}
-.colorWheelControls{display:grid;gap:6px;font-size:9px;color:#69727b}
-.colorWheelControls input[type="range"]{width:100px;display:block;margin-top:3px}
-.colorWheelSwatch{display:flex;align-items:center;gap:6px;font-size:9px;color:#9aa1a8}
-.colorWheelSwatch span{width:16px;height:16px;border-radius:4px;border:1px solid rgba(255,255,255,.2)}
+.colorPicker{display:flex;align-items:center;gap:8px}
+.colorPicker input[type="color"]{width:30px;height:30px;padding:0;border:1px solid #262c33;border-radius:5px;background:none;cursor:pointer}
+.colorPicker code{font-size:9px;color:#9aa1a8}
