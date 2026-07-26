@@ -11,9 +11,11 @@ web UI reflects real status instead of guessing.
 Setup: copy this file and forge_bridge_config.example.json (renamed to
 forge_bridge_config.json, with your real values) into your project's
 Content/Python/ folder, then restart Unreal Editor. Watch the Output Log for
-lines starting with "ForgeAI bridge:".
+lines starting with "ForgeAI bridge:", or read Saved/ForgeBridge/bridge.log
+directly (same messages, plus full tracebacks and HTTP response bodies).
 """
 
+import datetime
 import json
 import os
 import threading
@@ -27,9 +29,29 @@ import unreal
 _CONFIG_PATH = os.path.join(os.path.dirname(__file__), "forge_bridge_config.json")
 _POLL_INTERVAL_SECONDS = 5
 _DESTINATION_PATH = "/Game/ForgeAI"  # keep in sync with UNREAL_CONTENT_ROOT
+_LOG_DIR = os.path.join(unreal.Paths.project_saved_dir(), "ForgeBridge")
+_LOG_PATH = os.path.join(_LOG_DIR, "bridge.log")
 
 _pending_imports = []
 _lock = threading.Lock()
+_log_lock = threading.Lock()
+
+
+def _log(level, message):
+    line = "[{}] {}: {}".format(datetime.datetime.now().isoformat(timespec="seconds"), level, message)
+    with _log_lock:
+        try:
+            os.makedirs(_LOG_DIR, exist_ok=True)
+            with open(_LOG_PATH, "a", encoding="utf-8") as handle:
+                handle.write(line + "\n")
+        except Exception:
+            pass  # logging must never crash the bridge
+    if level == "ERROR":
+        unreal.log_error(message)
+    elif level == "WARN":
+        unreal.log_warning(message)
+    else:
+        unreal.log(message)
 
 
 def _load_config():
@@ -40,6 +62,13 @@ def _load_config():
     if not server_url or not token:
         raise ValueError("forge_bridge_config.json must set serverUrl and token")
     return server_url, token
+
+
+def _read_http_error_body(error):
+    try:
+        return error.read().decode("utf-8", errors="replace")
+    except Exception:
+        return "(could not read response body)"
 
 
 def _http_json(url, token, method="GET", body=None):
@@ -65,31 +94,36 @@ def _report(server_url, token, job_id, status, message=None):
         body["message"] = message[:2000]
     try:
         _http_json("{}/api/bridge/jobs/{}/report".format(server_url, job_id), token, method="POST", body=body)
+    except urllib.error.HTTPError as error:
+        _log("ERROR", "could not report job {} — HTTP {}: {}".format(job_id, error.code, _read_http_error_body(error)))
     except Exception:
-        unreal.log_error("ForgeAI bridge: could not report job {}\n{}".format(job_id, traceback.format_exc()))
+        _log("ERROR", "could not report job {}\n{}".format(job_id, traceback.format_exc()))
 
 
 def _poll_loop():
     try:
         server_url, token = _load_config()
     except Exception:
-        unreal.log_error("ForgeAI bridge: could not load forge_bridge_config.json\n{}".format(traceback.format_exc()))
+        _log("ERROR", "could not load {}\n{}".format(_CONFIG_PATH, traceback.format_exc()))
         return
 
-    unreal.log("ForgeAI bridge: polling {} every {}s".format(server_url, _POLL_INTERVAL_SECONDS))
+    _log("INFO", "polling {} every {}s (log: {})".format(server_url, _POLL_INTERVAL_SECONDS, _LOG_PATH))
     while True:
         try:
             result = _http_json("{}/api/bridge/jobs/next".format(server_url), token)
             job = result.get("job")
             if job:
-                unreal.log("ForgeAI bridge: claimed job {} ({})".format(job["jobId"], job["assetName"]))
+                _log("INFO", "claimed job {} ({})".format(job["jobId"], job["assetName"]))
                 glb_bytes = _download(job["downloadUrl"], token)
+                _log("INFO", "downloaded {} bytes for job {}".format(len(glb_bytes), job["jobId"]))
                 with _lock:
                     _pending_imports.append((job["jobId"], job["assetName"], glb_bytes, server_url, token))
         except urllib.error.HTTPError as error:
-            unreal.log_warning("ForgeAI bridge: poll failed — HTTP {}".format(error.code))
+            _log("WARN", "poll failed — HTTP {}: {}".format(error.code, _read_http_error_body(error)))
+        except urllib.error.URLError as error:
+            _log("WARN", "poll failed — could not reach server: {}".format(error.reason))
         except Exception:
-            unreal.log_warning("ForgeAI bridge: poll failed\n{}".format(traceback.format_exc()))
+            _log("WARN", "poll failed\n{}".format(traceback.format_exc()))
         time.sleep(_POLL_INTERVAL_SECONDS)
 
 
@@ -127,10 +161,10 @@ def _import_one(job_id, asset_name, glb_bytes, server_url, token):
         actor_subsystem = unreal.get_editor_subsystem(unreal.EditorActorSubsystem)
         actor = actor_subsystem.spawn_actor_from_object(mesh, unreal.Vector(0, 0, 0))
         actor_subsystem.set_selected_level_actors([actor])
-        unreal.log("ForgeAI bridge: imported and spawned {}".format(asset_name))
+        _log("INFO", "imported and spawned {}".format(asset_name))
         _report(server_url, token, job_id, "imported")
     except Exception as error:
-        unreal.log_error("ForgeAI bridge: import failed for {}\n{}".format(asset_name, traceback.format_exc()))
+        _log("ERROR", "import failed for {}\n{}".format(asset_name, traceback.format_exc()))
         _report(server_url, token, job_id, "error", str(error))
 
 
@@ -142,7 +176,10 @@ def _tick(_delta_seconds):
         _import_one(job_id, asset_name, glb_bytes, server_url, token)
 
 
-_tick_handle = unreal.register_slate_post_tick_callback(_tick)
-_poll_thread = threading.Thread(target=_poll_loop, daemon=True)
-_poll_thread.start()
-unreal.log("ForgeAI bridge: started")
+try:
+    _tick_handle = unreal.register_slate_post_tick_callback(_tick)
+    _poll_thread = threading.Thread(target=_poll_loop, daemon=True)
+    _poll_thread.start()
+    _log("INFO", "started")
+except Exception:
+    _log("ERROR", "failed to start\n{}".format(traceback.format_exc()))
