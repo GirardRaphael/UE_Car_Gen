@@ -61,12 +61,6 @@ function describeCustomization(c: Customization): string | null {
   return `[Customization: ${parts.join(", ")}]`;
 }
 
-function formatConversationLabel(createdAt: string, index: number): string {
-  const date = new Date(createdAt);
-  if (Number.isNaN(date.getTime())) return `Chat ${index + 1}`;
-  return date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-}
-
 function parseSseChunk(chunk: string, onEvent: (type: string, data: Record<string, unknown>) => void) {
   for (const block of chunk.split("\n\n")) {
     if (!block.trim()) continue;
@@ -238,12 +232,6 @@ export function Studio() {
     resetGenerationState();
   }
 
-  function selectConversation(conversationId: string) {
-    if (conversationId === activeConversationId) return;
-    setActiveConversationId(conversationId);
-    resetGenerationState();
-  }
-
   async function submitNewProject(event: FormEvent) {
     event.preventDefault();
     const name = newProjectName.trim();
@@ -390,19 +378,7 @@ export function Studio() {
           ))}
           {!state && <div className="projectCard"><span className="miniCar" /><span><b>Loading…</b></span></div>}
         </div>
-        <p className="eyebrow">Conversations</p>
-        <div className="listScroll">
-          <button className="newChatButton" onClick={createNewConversation} disabled={!state}>＋ New chat</button>
-          {(state?.conversations ?? []).map((conversation, index) => (
-            <button
-              key={conversation.id}
-              className={`conversationCard${conversation.id === state?.conversation.id ? " active" : ""}`}
-              onClick={() => selectConversation(conversation.id)}
-            >
-              {formatConversationLabel(conversation.createdAt, index)}
-            </button>
-          ))}
-        </div>
+        <button className="newChatButton" onClick={createNewConversation} disabled={!state}>＋ New chat</button>
         <div className="profile"><span>—</span><span><b>Local workspace</b><small>No authentication configured</small></span></div>
       </aside>
 
