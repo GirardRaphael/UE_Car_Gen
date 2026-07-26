@@ -9,11 +9,13 @@ import { processGenerationJob } from "@/server/generation";
 import { forgeTools } from "@/server/tools";
 
 export const runtime = "nodejs";
-// Generous ceiling so a queued vehicle generation (Meshy preview + refine +
-// GLB download, run via waitUntil after the SSE response closes) has room to
-// finish — the request itself returns in seconds; this bounds the background
-// work Vercel keeps the function alive for.
-export const maxDuration = 800;
+// 300s is the hard ceiling on the Hobby plan (Vercel rejects the deploy above
+// it); this bounds the whole request, including the waitUntil-extended
+// generation that keeps running after the SSE response closes. Most Meshy
+// preview+refine runs finish well inside this, but a slow one can still get
+// killed mid-flight — see the client-side timeout guard in studio.tsx and the
+// README's "Request flow" section.
+export const maxDuration = 300;
 
 const inputSchema = z.object({
   projectId: z.string().uuid(),

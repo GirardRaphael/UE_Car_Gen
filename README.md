@@ -85,11 +85,17 @@ of the `/api/chat` request itself (see "Request flow" below).
    running on the same machine as whatever processes the job.
 
 Because generation runs inside the `/api/chat` invocation's extended
-(`waitUntil`) lifetime, that route sets `export const maxDuration = 800` —
-comfortably above typical Meshy turnaround, but still a hard ceiling. A
-generation that runs longer than that gets killed mid-flight and its job is
-left stuck in `"running"` rather than marked `"failed"`; there's no resume
-path for that case yet.
+(`waitUntil`) lifetime, that route sets `export const maxDuration = 300` — the
+hard ceiling Vercel enforces on the Hobby plan (deploys above it are rejected
+outright). Most Meshy preview+refine runs finish comfortably inside that, but
+a slow one can still get killed mid-flight, leaving its job stuck in
+`"running"` with no more progress updates — there's no server-side resume path
+for that case yet. The frontend (`studio.tsx`) guards against this by giving
+up and showing an honest timeout message after ~320s of polling a job with no
+resolution, rather than spinning forever. Upgrading to a Vercel plan with a
+higher `maxDuration` ceiling removes this limit; so would moving generation
+back to a durable queue/worker (Vercel Queues, or a separately-hosted BullMQ
+worker) instead of `waitUntil`.
 
 ## Projects and conversations
 

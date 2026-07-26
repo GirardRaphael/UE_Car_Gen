@@ -118,7 +118,21 @@ export function Studio() {
     if (!activeJobId) return;
 
     let cancelled = false;
+    const startedAt = Date.now();
+    // The server request that runs generation is capped at 300s (Vercel Hobby
+    // plan's maxDuration ceiling — see api/chat/route.ts); past that the job
+    // is left stuck in "running" with no more updates coming. Give a little
+    // margin for the initial request round-trip, then stop polling and say so
+    // honestly instead of spinning forever.
+    const GENERATION_TIMEOUT_MS = 320_000;
+
     const poll = async () => {
+      if (Date.now() - startedAt > GENERATION_TIMEOUT_MS) {
+        setServiceError("Vehicle generation is taking longer than the server allows and may not complete. Try again.");
+        setActiveJobId(null);
+        setJobProgress(null);
+        return;
+      }
       try {
         const response = await fetch(`/api/jobs/${activeJobId}`);
         if (!response.ok) throw new Error("Job status unavailable");
